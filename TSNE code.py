@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
+#importing mini boone dataset
 data = fetch_openml(name='MiniBooNE', version=1, parser='auto')
 
 X = data.data
@@ -14,16 +15,15 @@ y = data.target.values
 # Label features as feature_1, feature_2 etc
 X.columns = [f"feature_{i+1}" for i in range(X.shape[1])]
 
-
 le = LabelEncoder()
 y_encoded = le.fit_transform(y)  # e.g., signal = 1, background = 0
 
-
+#Below we take a random subset of 5000 samples for t-SNE. Running it on full dataset is computationally expensive
 subset_idx = np.random.choice(len(X), 5000, replace=False)
 X_sub = X.iloc[subset_idx]
 y_sub = y_encoded[subset_idx]
 
-
+#Normalizing the features
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_sub)
 
@@ -44,7 +44,7 @@ plt.show()
 
 #Feature correlation analysis
 corrs = []
-for i, fname in enumerate(X.columns):
+for i, fname in enumerate(X_sub.columns):
     r1, _ = pearsonr(X_scaled[:, i], X_embedded[:, 0])  # correlation with dim 1
     r2, _ = pearsonr(X_scaled[:, i], X_embedded[:, 1])  # correlation with dim 2
     total_corr = abs(r1) + abs(r2)
