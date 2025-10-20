@@ -28,7 +28,7 @@ scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_sub)
 
 #This is the running of tsne
-tsne = TSNE(n_components=2, perplexity=40, random_state=42, init="pca", n_iter=1000)
+tsne = TSNE(n_components=2, perplexity=40, random_state=42, init="pca", n_iter_without_progress = 1000)
 X_embedded = tsne.fit_transform(X_scaled)
 
 
