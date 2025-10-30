@@ -8,6 +8,46 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from time import time
 
+# HYPERPARAMETERS - CENTRALIZED CONFIGURATION ------------------------------------------------------------------------------------------------
+
+# Random seed for reproducibility
+RANDOM_STATE = 42
+
+# QUBO Matrix Parameters
+W1 = 1.0              # Weight for feature relevance
+W2 = 0.5              # Weight for redundancy penalty
+LAMBDA_CORR = 1.0     # Correlation penalty multiplier
+PENALTY_K = 10.0      # Penalty weight for violating k-constraint
+
+# Simulated Annealing Parameters
+T_INIT = 100          # Initial temperature
+T_MIN = 0.01          # Minimum temperature
+ALPHA = 0.95          # Cooling rate
+MAX_ITER = 1000       # Iterations per temperature
+
+# Search Configuration
+K_MIN = 5             # Minimum k to test
+K_MAX = 50            # Maximum k to test
+K_STEP_COARSE = 5     # Step size for coarse search
+FINE_SEARCH_RADIUS = 3  # Search radius around threshold k
+
+# Optimal k Detection
+THRESHOLD_PCT = 0.98      # Minimum percentage of baseline (98%)
+MIN_IMPROVEMENT = 0.002   # Minimum improvement threshold (0.2%)
+
+# Random Forest Parameters
+RF_N_ESTIMATORS = 100     # Number of trees in Random Forest
+RF_N_JOBS = -1            # Number of parallel jobs (-1 = all cores)
+
+# Cross-Validation Parameters
+CV_N_SPLITS = 5           # Number of CV folds
+CV_SHUFFLE = True         # Shuffle data before splitting
+
+# Visualization Parameters
+FIG_DPI = 300            # DPI for saved figures
+
+# END OF HYPERPARAMETERS -------------------------------------------------------------------
+
 # LOAD DATA -------------------------------------------------------------------------------------------------------------------------
 
 print("Loading MiniBooNE dataset...")
@@ -24,7 +64,7 @@ print("Feature standardization complete.\n")
 
 # Mutual Information (relevance)
 print("Computing mutual information scores...")
-mi_scores = mutual_info_classif(X_scaled, y, random_state=42)
+mi_scores = mutual_info_classif(X_scaled, y, random_state=RANDOM_STATE)
 mi_normalized = (mi_scores - mi_scores.min()) / (mi_scores.max() - mi_scores.min())
 print("Mutual information computation complete.\n")
 
@@ -36,7 +76,7 @@ print("Correlation matrix computed.\n")
 # BUILD QUBO MATRIX WITH CONSTRAINT FOR EXACTLY k FEATURES -------------------------------------------------------------------------------------------------------------------------
 
 def build_qubo_with_k_constraint(n_features, mi_normalized, corr_matrix, k,
-                                 w1=1.0, w2=0.5, lambda_corr=1.0, penalty_k=10.0):
+                                 w1=W1, w2=W2, lambda_corr=LAMBDA_CORR, penalty_k=PENALTY_K):
     """
     Build QUBO matrix with constraint to select exactly k features.
 
@@ -91,8 +131,8 @@ def compute_energy(x, Q):
     return x.T @ Q @ x
 
 
-def simulated_annealing_k_features(Q, k, T_init=100, T_min=0.01, alpha=0.95,
-                                   max_iter=1000, random_state=42):
+def simulated_annealing_k_features(Q, k, T_init=T_INIT, T_min=T_MIN, alpha=ALPHA,
+                                   max_iter=MAX_ITER, random_state=RANDOM_STATE):
     """
     Simulated Annealing that enforces exactly k features selected.
 
@@ -196,12 +236,12 @@ print("=" * 70)
 print("STEP 1: COMPUTING BASELINE (ALL 50 FEATURES)")
 print("=" * 70 + "\n")
 
-clf_baseline = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+clf_baseline = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=RF_N_JOBS)
+cv = StratifiedKFold(n_splits=CV_N_SPLITS, shuffle=CV_SHUFFLE, random_state=RANDOM_STATE)
 
 start_time = time()
 baseline_scores = cross_val_score(clf_baseline, X_scaled, y, cv=cv, 
-                                  scoring='accuracy', n_jobs=-1)
+                                  scoring='accuracy', n_jobs=RF_N_JOBS)
 baseline_time = time() - start_time
 
 baseline_acc = baseline_scores.mean()
@@ -213,7 +253,7 @@ print(f"Training time: {baseline_time:.2f}s\n")
 # STEP 2: AUTOMATIC k SELECTION FUNCTION -------------------------------------------------------------------------------------------------------------------------
 
 def find_optimal_k(k_values, accuracies, baseline_acc, 
-                   threshold_pct=0.98, min_improvement=0.002):
+                   threshold_pct=THRESHOLD_PCT, min_improvement=MIN_IMPROVEMENT):
     """
     Two-stage approach to find optimal k:
     1. Find all k that achieve threshold_pct of baseline
@@ -277,8 +317,7 @@ def find_optimal_k(k_values, accuracies, baseline_acc,
 
 # HELPER FUNCTION TO EVALUATE A SINGLE k VALUE -------------------------------------------------------------------------------------------------------------------------
 
-def evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv, 
-               w1=1.0, w2=0.5, lambda_corr=1.0, penalty_k=10.0):
+def evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv):
     """
     Evaluate QUBO feature selection for a specific k value.
     Returns a dictionary with results.
@@ -288,17 +327,11 @@ def evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv,
     print(f"{'='*70}\n")
 
     # Build QUBO matrix for this k
-    Q = build_qubo_with_k_constraint(
-        X_scaled.shape[1], mi_normalized, corr_matrix, k,
-        w1=w1, w2=w2, lambda_corr=lambda_corr, penalty_k=penalty_k
-    )
+    Q = build_qubo_with_k_constraint(X_scaled.shape[1], mi_normalized, corr_matrix, k)
 
     # Run SA
     start_time = time()
-    best_features, best_energy, sa_history = simulated_annealing_k_features(
-        Q, k=k, T_init=100, T_min=0.01, alpha=0.95,
-        max_iter=1000, random_state=42
-    )
+    best_features, best_energy, sa_history = simulated_annealing_k_features(Q, k=k)
     sa_time = time() - start_time
 
     # Verify constraint
@@ -309,8 +342,8 @@ def evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv,
     X_selected = X_scaled[:, selected_indices]
 
     # Evaluate with cross-validation
-    clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-    cv_scores = cross_val_score(clf, X_selected, y, cv=cv, scoring='accuracy', n_jobs=-1)
+    clf = RandomForestClassifier(n_estimators=RF_N_ESTIMATORS, random_state=RANDOM_STATE, n_jobs=RF_N_JOBS)
+    cv_scores = cross_val_score(clf, X_selected, y, cv=cv, scoring='accuracy', n_jobs=RF_N_JOBS)
 
     result = {
         'k': k,
@@ -337,17 +370,11 @@ print("=" * 70)
 print("STEP 2: TWO-PHASE SEARCH FOR OPTIMAL k")
 print("=" * 70 + "\n")
 
-# Hyperparameters for QUBO
-w1 = 1.0
-w2 = 0.5
-lambda_corr = 1.0
-penalty_k = 10.0
-
 print(f"QUBO Hyperparameters:")
-print(f"  w1 (relevance weight): {w1}")
-print(f"  w2 (redundancy weight): {w2}")
-print(f"  lambda_corr: {lambda_corr}")
-print(f"  penalty_k: {penalty_k}\n")
+print(f"  w1 (relevance weight): {W1}")
+print(f"  w2 (redundancy weight): {W2}")
+print(f"  lambda_corr: {LAMBDA_CORR}")
+print(f"  penalty_k: {PENALTY_K}\n")
 
 # PHASE 1: COARSE SEARCH (steps of 5) WITH EARLY STOPPING -------------------------------------------------------------------------------------------------------------------------
 
@@ -355,21 +382,20 @@ print("=" * 70)
 print("PHASE 1: COARSE SEARCH (step size = 5)")
 print("=" * 70 + "\n")
 
-k_values_coarse = list(range(5, 51, 5))  # [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-threshold_target = 0.98 * baseline_acc
+k_values_coarse = list(range(K_MIN, K_MAX + 1, K_STEP_COARSE))
+threshold_target = THRESHOLD_PCT * baseline_acc
 
 print(f"Planned k values: {k_values_coarse}")
-print(f"Stopping criterion: Accuracy ≥ 98% of baseline ({threshold_target:.4f})\n")
+print(f"Stopping criterion: Accuracy ≥ {THRESHOLD_PCT*100:.0f}% of baseline ({threshold_target:.4f})\n")
 
 results = []
 k_threshold_met = None
 
 for k in k_values_coarse:
-    result = evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv,
-                       w1=w1, w2=w2, lambda_corr=lambda_corr, penalty_k=penalty_k)
+    result = evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv)
     results.append(result)
     
-    # Check if we've reached 98% threshold
+    # Check if we've reached threshold
     if result['cv_accuracy_mean'] >= threshold_target and k_threshold_met is None:
         k_threshold_met = k
         print(f"\n✓ THRESHOLD REACHED at k={k}")
@@ -378,9 +404,9 @@ for k in k_values_coarse:
         break
 
 if k_threshold_met is None:
-    print(f"\n⚠️  WARNING: Never reached 98% threshold in coarse search")
+    print(f"\n⚠️  WARNING: Never reached {THRESHOLD_PCT*100:.0f}% threshold in coarse search")
     print(f"  Best k found: k={results[-1]['k']} with {results[-1]['cv_accuracy_mean']:.4f}")
-    k_threshold_met = results[-1]['k']  # Use best k found
+    k_threshold_met = results[-1]['k']
 
 # Find approximate optimal k from coarse search
 accuracies_coarse = [r['cv_accuracy_mean'] for r in results]
@@ -396,10 +422,9 @@ print("=" * 70)
 print("PHASE 2: FINE SEARCH (step size = 1)")
 print("=" * 70 + "\n")
 
-# Define fine search range: 3 below and 3 above the threshold k
-fine_search_radius = 3
-k_min_fine = max(1, k_threshold_met - fine_search_radius)
-k_max_fine = min(50, k_threshold_met + fine_search_radius)
+# Define fine search range
+k_min_fine = max(1, k_threshold_met - FINE_SEARCH_RADIUS)
+k_max_fine = min(K_MAX, k_threshold_met + FINE_SEARCH_RADIUS)
 
 # Only test k values we haven't tested yet
 k_values_fine = [k for k in range(k_min_fine, k_max_fine + 1) 
@@ -411,8 +436,7 @@ if k_values_fine:
     print(f"Testing additional k values: {k_values_fine}\n")
     
     for k in k_values_fine:
-        result = evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv,
-                           w1=w1, w2=w2, lambda_corr=lambda_corr, penalty_k=penalty_k)
+        result = evaluate_k(k, X_scaled, y, mi_normalized, corr_matrix, cv)
         results.append(result)
     
     # Sort results by k for easier analysis
@@ -434,12 +458,9 @@ k_values_all = sorted([r['k'] for r in results])
 accuracies_all_dict = {r['k']: r['cv_accuracy_mean'] for r in results}
 accuracies_all = [accuracies_all_dict[k] for k in k_values_all]
 
-min_improvement = 0.002
-threshold_target = 0.98 * baseline_acc
-
 print(f"Baseline accuracy: {baseline_acc:.4f}")
-print(f"Target (98% of baseline): {threshold_target:.4f}")
-print(f"Diminishing returns threshold: {min_improvement:.4f} (0.2%)\n")
+print(f"Target ({THRESHOLD_PCT*100:.0f}% of baseline): {threshold_target:.4f}")
+print(f"Diminishing returns threshold: {MIN_IMPROVEMENT:.4f} ({MIN_IMPROVEMENT*100:.2f}%)\n")
 
 print("Analyzing improvements:")
 optimal_k = None
@@ -456,7 +477,7 @@ for i in range(len(k_values_all) - 1):
     status_threshold = "✓" if meets_threshold else "✗"
     
     # Check if improvement is below threshold
-    low_improvement = improvement < min_improvement
+    low_improvement = improvement < MIN_IMPROVEMENT
     status_improvement = "✗" if low_improvement else "✓"
     
     print(f"  {status_threshold} k={k_current:2d}: {acc_current:.4f} "
@@ -468,7 +489,7 @@ for i in range(len(k_values_all) - 1):
         optimal_k = k_current
         print(f"\n✓ OPTIMAL k FOUND: {optimal_k}")
         print(f"  Accuracy: {acc_current:.4f} (≥ {threshold_target:.4f})")
-        print(f"  Next improvement: {improvement:.4f} < {min_improvement:.4f}")
+        print(f"  Next improvement: {improvement:.4f} < {MIN_IMPROVEMENT:.4f}")
         print(f"  This is the minimum features needed!")
         break
 
@@ -522,8 +543,8 @@ ax1.errorbar(k_vals, acc_vals, yerr=acc_stds, marker='o', linewidth=2,
              markersize=8, capsize=5, color='#3b82f6')
 ax1.axhline(baseline_acc, color='red', linestyle='--',
             linewidth=2, label='Baseline (all features)')
-ax1.axhline(0.98*baseline_acc, color='orange', linestyle=':',
-            linewidth=2, label='98% threshold')
+ax1.axhline(THRESHOLD_PCT*baseline_acc, color='orange', linestyle=':',
+            linewidth=2, label=f'{THRESHOLD_PCT*100:.0f}% threshold')
 ax1.axvline(optimal_k, color='green', linestyle='--',
             linewidth=2, alpha=0.7, label=f'Optimal k={optimal_k}')
 ax1.set_xlabel('Number of Features (k)', fontweight='bold', fontsize=11)
@@ -584,25 +605,7 @@ ax6.set_title('Top 30 Most Frequently Selected Features', fontweight='bold', fon
 ax6.grid(alpha=0.3, axis='x')
 
 plt.tight_layout()
-plt.savefig('qubo_sa_optimal_k_results.png', dpi=300, bbox_inches='tight')
-print("✓ Visualization saved: 'qubo_sa_optimal_k_results.png'")
-
-# Additional plot: MI scores of selected features for optimal k -------------------------------------------------------------------------------------------------------------------------
-fig2, ax = plt.subplots(figsize=(12, 6))
-all_mi = mi_scores.copy()
-selected_mask = np.zeros(len(all_mi), dtype=bool)
-selected_mask[best_result['selected_indices']] = True
-
-colors = ['#ef4444' if not selected_mask[i] else '#10b981' for i in range(len(all_mi))]
-ax.bar(range(len(all_mi)), all_mi, color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
-ax.set_xlabel('Feature Index', fontweight='bold', fontsize=12)
-ax.set_ylabel('Mutual Information Score', fontweight='bold', fontsize=12)
-ax.set_title(f'MI Scores: Selected (green) vs Not Selected (red) for k={optimal_k}',
-             fontweight='bold', fontsize=13)
-ax.grid(alpha=0.3, axis='y')
-
-plt.tight_layout()
-plt.savefig('selected_features_mi_scores.png', dpi=300, bbox_inches='tight')
+plt.savefig('selected_features_mi_scores.png', dpi=FIG_DPI, bbox_inches='tight')
 print("✓ MI visualization saved: 'selected_features_mi_scores.png'")
 
 plt.close('all')
@@ -623,10 +626,32 @@ with open('qubo_optimal_k_results.txt', 'w') as f:
     f.write(f"Total samples: {X.shape[0]}\n\n")
 
     f.write(f"QUBO Hyperparameters:\n")
-    f.write(f"  w1 (relevance weight): {w1}\n")
-    f.write(f"  w2 (redundancy weight): {w2}\n")
-    f.write(f"  lambda_corr: {lambda_corr}\n")
-    f.write(f"  penalty_k: {penalty_k}\n\n")
+    f.write(f"  w1 (relevance weight): {W1}\n")
+    f.write(f"  w2 (redundancy weight): {W2}\n")
+    f.write(f"  lambda_corr: {LAMBDA_CORR}\n")
+    f.write(f"  penalty_k: {PENALTY_K}\n\n")
+    
+    f.write(f"Simulated Annealing Hyperparameters:\n")
+    f.write(f"  T_init: {T_INIT}\n")
+    f.write(f"  T_min: {T_MIN}\n")
+    f.write(f"  alpha (cooling rate): {ALPHA}\n")
+    f.write(f"  max_iter: {MAX_ITER}\n\n")
+    
+    f.write(f"Search Configuration:\n")
+    f.write(f"  k_min: {K_MIN}\n")
+    f.write(f"  k_max: {K_MAX}\n")
+    f.write(f"  k_step_coarse: {K_STEP_COARSE}\n")
+    f.write(f"  fine_search_radius: {FINE_SEARCH_RADIUS}\n")
+    f.write(f"  threshold_pct: {THRESHOLD_PCT}\n")
+    f.write(f"  min_improvement: {MIN_IMPROVEMENT}\n\n")
+    
+    f.write(f"Random Forest Hyperparameters:\n")
+    f.write(f"  n_estimators: {RF_N_ESTIMATORS}\n")
+    f.write(f"  random_state: {RANDOM_STATE}\n\n")
+    
+    f.write(f"Cross-Validation:\n")
+    f.write(f"  n_splits: {CV_N_SPLITS}\n")
+    f.write(f"  shuffle: {CV_SHUFFLE}\n\n")
 
     f.write(f"Tested k values: {k_vals}\n\n")
     
@@ -655,14 +680,32 @@ with open('qubo_optimal_k_results.txt', 'w') as f:
 print("✓ Results saved: 'qubo_optimal_k_results.txt'")
 
 # Save selected features for optimal k -------------------------------------------------------------------------------------------------------------------------
-np.savetxt(f'selected_features_k{optimal_k}.txt' ,
+np.savetxt(f'selected_features_k{optimal_k}.txt',
            best_result['selected_indices'], fmt='%d')
 print(f"✓ Selected features saved: 'selected_features_k{optimal_k}.txt'")
 
 print(f"\n{'='*70}")
 print("COMPLETE!")
 print(f"{'='*70}")
-print(f"\nOptimal configuration: k={optimal_k} features")
+print(f"\nOptimal configuration: k={optimal_k} features")   
 print(f"Accuracy: {best_result['cv_accuracy_mean']:.4f} (+/- {best_result['cv_accuracy_std']:.4f})")
 print(f"Reduction: {(1 - optimal_k / X.shape[1]) * 100:.1f}%")
 print(f"Retention: {(best_result['cv_accuracy_mean'] / baseline_acc) * 100:.2f}% of baseline")
+plt.savefig('qubo_sa_optimal_k_results.png', dpi=FIG_DPI, bbox_inches='tight')
+print("✓ Visualization saved: 'qubo_sa_optimal_k_results.png'")
+
+# Additional plot: MI scores of selected features for optimal k -------------------------------------------------------------------------------------------------------------------------
+fig2, ax = plt.subplots(figsize=(12, 6))
+all_mi = mi_scores.copy()
+selected_mask = np.zeros(len(all_mi), dtype=bool)
+selected_mask[best_result['selected_indices']] = True
+
+colors = ['#ef4444' if not selected_mask[i] else '#10b981' for i in range(len(all_mi))]
+ax.bar(range(len(all_mi)), all_mi, color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
+ax.set_xlabel('Feature Index', fontweight='bold', fontsize=12)
+ax.set_ylabel('Mutual Information Score', fontweight='bold', fontsize=12)
+ax.set_title(f'MI Scores: Selected (green) vs Not Selected (red) for k={optimal_k}',
+             fontweight='bold', fontsize=13)
+ax.grid(alpha=0.3, axis='y')
+
+plt.tight_layout()
